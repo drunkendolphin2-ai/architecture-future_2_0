@@ -1,0 +1,112 @@
+@startuml target-architecture
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+title «Будущее 2.0» — целевая архитектура через год (C4, контейнеры)
+
+LAYOUT_TOP_DOWN()
+
+Person(user, "Сотрудник", "Аналитик, руководитель, сотрудник домена")
+
+' ---------- Домены-источники ----------
+Boundary(clinics, "Домен «Клиники»") {
+  Container(clinicsApp, "Клиники", "Java/Go", "Работа операторов и врачей, медкарты. Заменяет PowerBuilder")
+  ContainerDb(clinicsDb, "БД клиник", "PostgreSQL", "Медкарты, истории болезни, исследования")
+}
+
+Boundary(fintech, "Домен «Финтех»") {
+  Container(fintechApp, "Финтех", "Go/Java", "Банковские сервисы, кредиты, счета")
+  ContainerDb(fintechDb, "БД финтеха", "PostgreSQL", "Финансовая история, кредиты")
+}
+
+Boundary(internal, "Домен «Внутренние сервисы»") {
+  Container(internalApp, "Внутренние сервисы", "Java", "Персонал, инвентаризация, финотчётность головного офиса")
+  ContainerDb(internalDb, "БД внутренних сервисов", "PostgreSQL", "Персонал, инвентаризация")
+}
+
+Boundary(ai, "Домен «ИИ»") {
+  Container(aiApp, "ИИ-сервисы", "Python", "Рекомендации по диагнозам и лечению")
+  ContainerDb(aiDb, "БД ИИ", "PostgreSQL", "Датасеты, результаты моделей")
+}
+
+Boundary(pharma, "Будущий домен «Фарма / Электроника»") {
+  Container(pharmaApp, "Фарма", "—", "Подключается по тому же шаблону, что и остальные домены")
+  ContainerDb(pharmaDb, "БД фармы", "—", "Собственные данные домена")
+}
+
+' ---------- Транспорт ----------
+ContainerQueue(medKafka, "Kafka медицинских данных", "Kafka", "Изолированный контур: свои ACL и аудит")
+ContainerQueue(kafka, "Kafka", "Kafka", "Общий транспорт немедицинских данных доменов")
+
+' ---------- Платформа данных ----------
+Boundary(platform, "Платформа данных (Lakehouse)") {
+  ContainerDb(lake, "Озеро данных", "S3 + Apache Iceberg", "Зоны по доменам, слои raw → cleaned → marts")
+  Container(nessie, "Каталог таблиц", "Nessie", "Хранит текущую версию каждой таблицы Iceberg, атомарно переключает версии при записи")
+  Container(airflow, "Оркестратор", "Airflow", "DAG'и доменов строят витрины")
+  ContainerDb(clickhouse, "Витрины", "ClickHouse", "Готовые витрины, чтение Iceberg для медленных запросов")
+}
+
+' ---------- Потребление ----------
+Boundary(bi, "Самообслуживание") {
+  Container(portal, "Портал самообслуживания", "DataLens", "Отчёты и конструктор отчётов")
+  Container(datahub, "Каталог данных", "DataHub", "Поиск витрин, владельцы, описание полей, lineage")
+}
+
+Boundary(iam, "IAM") {
+  Container(keycloak, "Keycloak", "Keycloak", "Аутентификация, роли, уровни доступа")
+  ContainerDb(keycloakDb, "БД Keycloak", "PostgreSQL", "Пользователи и роли")
+}
+
+' ---------- Связи ----------
+Rel(clinicsApp, clinicsDb, "Чтение/запись", "SQL")
+Rel(fintechApp, fintechDb, "Чтение/запись", "SQL")
+Rel(internalApp, internalDb, "Чтение/запись", "SQL")
+Rel(aiApp, aiDb, "Чтение/запись", "SQL")
+Rel(pharmaApp, pharmaDb, "Чтение/запись", "SQL")
+Rel(keycloak, keycloakDb, "Чтение/запись", "SQL")
+
+Rel(clinicsDb, medKafka, "Медданные", "CDC (Debezium)")
+Rel(medKafka, aiApp, "Медданные")
+Rel(clinicsApp, aiApp, "Запрос рекомендаций ИИ", "REST")
+
+Rel(fintechDb, kafka, "Данные домена", "CDC (Debezium)")
+Rel(internalDb, kafka, "Данные домена", "CDC (Debezium)")
+Rel(pharmaDb, kafka, "Данные домена", "CDC (Debezium)")
+Rel_U(kafka, lake, "Данные", "Kafka Connect, Iceberg sink")
+
+Rel(airflow, lake, "Запрос данных для обработки")
+Rel(airflow, clickhouse, "Готовые витрины")
+Rel(clickhouse, lake, "Медленные витрины", "Iceberg")
+Rel(aiApp, lake, "Запрос немедицинских данных", "Iceberg")
+
+Rel(kafka, nessie, "Коммит новой версии таблицы", "Kafka Connect")
+Rel(airflow, nessie, "Коммит новой версии таблицы")
+Rel(clickhouse, nessie, "Где текущая версия таблицы")
+Rel(aiApp, nessie, "Где текущая версия таблицы")
+
+Rel(user, portal, "Отчёты", "HTTPS")
+Rel(portal, keycloak, "Проверка доступа к данным", "OIDC")
+Rel(portal, clickhouse, "Запрос данных из витрин", "SQL")
+Rel(portal, datahub, "Запрос информации по витринам", "REST")
+Rel(datahub, clickhouse, "Сбор схем витрин (pull)")
+Rel(airflow, datahub, "Прописка данных по витринам, lineage (push)", "REST")
+
+' ---------- Пометки ----------
+note as legacy
+  <b>Легаси SQL Server</b>
+  Медданные мигрируют в БД клиник,
+  остальное — в озеро данных / ClickHouse.
+end note
+
+note as scenarios
+  <b>Бизнес-сценарии</b>
+  1) Быстрая отчётность: готовые витрины в ClickHouse + портал.
+  2) Независимое развитие финтеха и ИИ: свои БД, данные уходят
+     через CDC, бизнес-логики в общем хранилище нет.
+  3) Подключение новых бизнесов: новый домен подключается
+     к Kafka по тому же шаблону (пример — фарма).
+  4) Требования регуляторов: медконтур изолирован,
+     медданные в витрины не попадают, доступ через Keycloak.
+end note
+
+SHOW_LEGEND()
+@enduml
