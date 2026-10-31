@@ -1,0 +1,126 @@
+@startuml dfd
+title «Будущее 2.0» - потоки данных между доменами (DFD)
+
+skinparam shadowing false
+skinparam defaultFontSize 12
+skinparam rectangle {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+}
+skinparam usecase {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+}
+skinparam database {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+}
+skinparam package {
+  BorderColor #555555
+  BorderStyle dashed
+}
+
+left to right direction
+
+' ---------- Внешние сущности ----------
+rectangle "Пациент" as patient
+rectangle "Врач / оператор" as doctor
+rectangle "Сотрудник\n(аналитик, руководитель)" as employee
+rectangle "Медоборудование" as device
+rectangle "Регуляторы\n(ЦБ, Минздрав)" as regulator
+
+' ---------- Домены ----------
+package "Клиники" {
+  usecase "1. Приём и лечение" as p_clinic
+  database "Медкарты,\nисследования" as d_medcard
+  database "Счета\nна лечение" as d_invoice
+}
+
+package "ИИ" {
+  usecase "2. Рекомендации\nпо диагнозам" as p_ai
+  database "Датасеты,\nмодели" as d_ai
+}
+
+package "Финтех" {
+  usecase "3. Финансовые\nсервисы" as p_fintech
+  database "Счета, кредиты,\nплатежи" as d_fintech
+}
+
+package "Корпоративный\n(головной офис)" {
+  usecase "4. Персонал,\nинвентаризация, финансы" as p_corp
+  database "Персонал,\nинвентарь" as d_corp
+}
+
+package "Фарма" {
+  usecase "5. Поставки\nпрепаратов" as p_pharma
+  database "Каталог,\nостатки" as d_pharma
+}
+
+package "Электроника" {
+  usecase "6. Обслуживание\nоборудования" as p_electro
+  database "Телеметрия,\nсервис" as d_electro
+}
+
+' ---------- Транспорт и платформа ----------
+queue "Kafka медданных" as k_med
+queue "Kafka\n(контракты доменов)" as k_main
+
+package "Платформа данных" {
+  usecase "7. Построение\nвитрин" as p_platform
+  database "Lakehouse +\nвитрины ClickHouse" as d_platform
+  usecase "8. Портал\nсамообслуживания" as p_portal
+}
+
+' ---------- Потоки ----------
+patient --> p_clinic : запись, жалобы
+doctor --> p_clinic : осмотры, назначения
+p_clinic --> d_medcard
+p_clinic --> d_invoice
+device --> p_clinic : [S2] снимки, результаты
+device --> p_electro : телеметрия
+
+' S2: ИИ по медданным
+d_medcard --> k_med : [S2] медданные (CDC)
+k_med --> p_ai : [S2] медданные
+p_ai --> d_ai
+p_clinic --> p_ai : [S2] запрос рекомендации
+p_ai --> p_clinic : [S2] рекомендация врачу
+
+' S1: новый финтех-сервис
+d_invoice --> k_main : [S1] счёт на лечение\n(без диагнозов)
+k_main --> p_fintech : [S1] счёт на лечение
+patient --> p_fintech : [S1] заявка на рассрочку
+p_fintech --> d_fintech
+p_fintech --> regulator : отчётность ЦБ
+
+' S4: новые бизнесы
+p_pharma --> d_pharma
+d_pharma --> k_main : [S4] каталог, остатки
+k_main --> p_clinic : [S4] наличие препаратов
+p_electro --> d_electro
+d_electro --> k_main : [S4] статус оборудования
+p_corp --> d_corp
+
+' S3: отчётность
+d_fintech --> k_main : [S3] CDC
+d_corp --> k_main : [S3] CDC
+d_invoice --> k_main : [S3] CDC
+d_ai --> k_main : [S3] метрики ИИ (обезличенно)
+k_main --> p_platform : [S3] данные доменов
+p_platform --> d_platform
+d_platform --> p_portal : [S3] витрины
+p_portal --> employee : [S3] отчёты
+d_platform --> p_pharma : [S4] спрос на препараты\n(агрегаты)
+
+legend right
+  <b>Сценарии</b>
+  S1 - запуск нового финтех-сервиса
+       (рассрочка на лечение)
+  S2 - ИИ-анализ медданных
+  S3 - отчётность через портал
+  S4 - подключение фармы и электроники
+
+  Медданные идут только по контуру S2
+  и не попадают в Kafka доменов и платформу.
+endlegend
+@enduml
