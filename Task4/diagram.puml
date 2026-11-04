@@ -1,0 +1,65 @@
+@startuml diagram
+title Автоматизация развёртывания (Yandex Cloud)
+
+skinparam shadowing false
+skinparam defaultFontSize 12
+skinparam rectangle {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+}
+skinparam rectangle<<manual>> {
+  BorderStyle dashed
+  BackgroundColor #EEEEEE
+}
+skinparam node {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+}
+skinparam database {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+}
+
+actor "Инженер" as eng
+rectangle "Terraform\n(main.tf, variables.tf,\nterraform.tfvars)" as tf
+
+rectangle "Вручную" <<manual>> {
+  rectangle "Облако и каталог" <<manual>> as m_folder
+  rectangle "Сервисный аккаунт\n+ роль editor" <<manual>> as m_sa
+  rectangle "Авторизованный ключ\nkey.json" <<manual>> as m_key
+  rectangle "SSH-ключ" <<manual>> as m_ssh
+}
+
+rectangle "Управляется Terraform" {
+  rectangle "VPC network" as net
+  rectangle "Подсеть 10.10.1.0/24" {
+    node "VM\n2 vCPU 20%, 2 ГБ\nNAT: публичный IP" as vm
+    database "Boot disk\nHDD 10 ГБ" as boot
+    database "Data disk\nSSD 10 ГБ" as disk
+    rectangle "Security group\nSSH с разрешённых IP" as sg
+  }
+}
+
+eng --> tf : init / plan / apply
+eng ..> m_folder : консоль
+m_sa --> m_key
+m_key --> tf : авторизация
+m_ssh --> tf : публичный ключ в metadata
+m_folder --> tf : cloud_id, folder_id
+
+tf --> net
+tf --> vm
+tf --> boot
+tf --> disk
+tf --> sg
+
+boot --> vm : boot disk
+disk --> vm : secondary disk
+vm -- sg
+eng --> vm : SSH
+
+legend right
+  Сплошная рамка — создаётся Terraform
+  Пунктир, серый фон — создаётся вручную
+endlegend
+@enduml
